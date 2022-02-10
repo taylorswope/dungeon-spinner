@@ -71,7 +71,8 @@ class Graph():
 				if not finished: break
 		return available_nodes
 	
-	def place_key_item(self, key_item, try_again_on_failure=False):
+	def place_key_item(self, key_item, try_again_on_failure=True):
+		"""Places a lock on a valid link, then places the key for the lock in an accessible node."""
 		link_options = [l for l in self.links if len(l.required_keys) < l.max_required_keys]
 		while len(link_options) > 0:
 			selected_link = random.choice(link_options)
@@ -83,6 +84,23 @@ class Graph():
 				logging.info("Placed %s in %s for a lock on %s" % (key_item, selected_node, selected_link))
 				return True
 			else:
+				selected_link.remove_required_key(key_item)
+				link_options.remove(selected_link)
+				if not try_again_on_failure: return False
+		return False
+	
+	def place_lock_for_key(self, key_item, try_again_on_failure=True):
+		"""Places a lock for an already-placed key item. Meant for reusable keys."""
+		link_options = [l for l in self.links if len(l.required_keys) < l.max_required_keys]
+		while len(link_options) > 0:
+			selected_link = random.choice(link_options)
+			selected_link.add_required_key(key_item)
+			available_nodes = self.get_available_nodes()
+			if key_item.location in available_nodes:
+				logging.info("Placed a lock on %s for %s" % (selected_link, key_item))
+				return True
+			else:
+				link_options.remove(selected_link)
 				selected_link.remove_required_key(key_item)
 				if not try_again_on_failure: return False
 		return False
@@ -113,6 +131,7 @@ class Node(GraphElement):
 	
 	def add_key_item(self, key_item):
 		self.key_items.append(key_item)
+		key_item.location = self
 		assert len(self.key_items) <= self.max_key_items
 
 class Link(GraphElement):
@@ -142,10 +161,11 @@ class Link(GraphElement):
 		self.required_keys.remove(key_item)
 
 class KeyItem():
-	def __init__(self, id, reusable = False):
+	def __init__(self, id, location=None, reusable=False):
 		self.id = id
 		self.reusable = reusable
 		self.used = False
+		self.location = location
 	
 	def __str__(self):
 		return "Key Item %s" % self.id
@@ -156,7 +176,7 @@ class KeyItem():
 #############################################################################################
 
 def test():
-	random.seed()
+	random.seed(1)
 	
 	graph = Graph()
 	node1 = graph.add_node("1")
@@ -173,13 +193,16 @@ def test():
 	
 	graph.set_start_node(node1)
 	
+	blue_key = KeyItem("Blue", reusable=True)
 	key_items = [
 		KeyItem("Red"),
 		KeyItem("Orange"),
 		KeyItem("Yellow"),
 		KeyItem("Green"),
-		KeyItem("Cyan")
+		KeyItem("Cyan"),
+		blue_key
 	]
+	
 	
 	graph.link_nodes(node1, node2)
 	graph.link_nodes(node2, node3)
@@ -197,6 +220,8 @@ def test():
 	
 	for k in key_items:
 		graph.place_key_item(k)
+	for i in range(3):
+		graph.place_lock_for_key(blue_key)
 	
 	print(graph.validate())
 
