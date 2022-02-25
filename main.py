@@ -47,8 +47,11 @@ class Graph():
 		min_nodes=6,
 		max_nodes=10,
 		max_links_per_node=4,
-		loopback_chance=0.1, # chance that a link will go to an existing node instead of a new one
-		lock_count=4
+		loopback_chance_from_none=0.1, # chance that a link will go to an existing node instead of a new one when coming from a region-less node
+		loopback_chance_from_region=0.1, # chance that a link will go to an existing node instead of a new one when coming from an existing region
+		lock_count=4,
+		region_chance_from_none=0.4, # chance that a new node will introduce a new region when stemming from a region-less node
+		region_chance_from_region=0.1 # chance that a new node will introuce a new region instead of continuing an existing region
 	):
 		graph = cls()
 		next_node_id = 1
@@ -56,15 +59,27 @@ class Graph():
 		graph.set_start_node(start_node)
 		next_node_id += 1
 		node_count = random.randint(min_nodes, max_nodes)
+		current_region = 1
 		while len(graph.nodes) <= node_count:
 			node_options = [n for n in graph.nodes if len(n.links) < max_links_per_node]
 			current_node = random.choice(node_options)
 			roll = random.random()
-			if len(node_options) > 1 and roll < loopback_chance:
+			if len(node_options) > 1 and ((current_node.region and roll < loopback_chance_from_region) or roll < loopback_chance_from_none):
+				# link back to an existing node instead of making a new one
 				linked_node = random.choice([n for n in node_options if n is not current_node])
 				graph.link_nodes(current_node, linked_node)
 			else:
-				new_node = graph.add_node(node_id=str(next_node_id))
+				roll = random.random()
+				if current_node.region:
+					needed_roll = region_chance_from_region
+				else:
+					needed_roll = region_chance_from_none
+				if roll < needed_roll:
+					region = current_region
+					current_region += 1
+				else:
+					region = current_node.region
+				new_node = graph.add_node(node_id=str(next_node_id), region=region)
 				next_node_id += 1
 				graph.link_nodes(current_node, new_node)
 		key_names = list(KEY_NAMES)
@@ -73,9 +88,8 @@ class Graph():
 			graph.place_key_item(key_item)
 		return graph
 		
-	
-	def add_node(self, node_id="null"):
-		new_node = Node(self, node_id)
+	def add_node(self, node_id="null", region=None):
+		new_node = Node(self, node_id, region=region)
 		self.nodes.append(new_node)
 		return new_node
 	
@@ -90,6 +104,8 @@ class Graph():
 		self.links.append(new_link)
 		node1.links.append(new_link)
 		node2.links.append(new_link)
+		if node1.region and node1.region == node2.region:
+			new_link.region = node1.region
 	
 	def evaluate_link(self, link, available_keys):
 		assert link in self.links
@@ -125,6 +141,8 @@ class Graph():
 	def place_key_item(self, key_item, try_again_on_failure=True):
 		"""Places a lock on a valid link, then places the key for the lock in an accessible node."""
 		link_options = [l for l in self.links if len(l.required_keys) < l.max_required_keys]
+		if key_item.region:
+			link_options = [l for l in link_options if l.region == key_item.region]
 		while len(link_options) > 0:
 			selected_link = random.choice(link_options)
 			selected_link.add_required_key(key_item)
@@ -145,6 +163,8 @@ class Graph():
 	def place_lock_for_key(self, key_item, try_again_on_failure=True):
 		"""Places a lock for an already-placed key item. Meant for reusable keys."""
 		link_options = [l for l in self.links if len(l.required_keys) < l.max_required_keys]
+		if key_item.region:
+			link_options = [l for l in link_options if l.region == key_item.region]
 		while len(link_options) > 0:
 			selected_link = random.choice(link_options)
 			selected_link.add_required_key(key_item)
@@ -161,7 +181,7 @@ class Graph():
 	def validate(self):
 		return len(self.get_available_nodes()) == len(self.nodes)
 	
-	def draw(self, spring_strength=0.1, antigravity_strength=0.1):
+	def draw(self, spring_strength=0.4, antigravity_strength=400000):
 		size = (len(self.nodes) + len(self.links))*75
 		convergence_threshold = 10
 		
@@ -179,34 +199,34 @@ class Graph():
 				break
 			converged = True
 			for b in blobs:
-				f = [0, 0]
-				# antigravity pushing away from other blobs
-				for other in blobs:
-					if other is b: continue
-					v = [blobs[b][0] - blobs[other][0], blobs[b][1] - blobs[other][1]]
-					r = math.sqrt(v[0]**2 + v[1]**2)
-					if r < 1: r = 1
-					d = [v[0]/r, v[1]/r]
-					strength = antigravity_strength/(r**2)
-					f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-				# spring pulling links together
-				if type(b) == Node:
-					for other in b.links:
-						v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
-						r = math.sqrt(v[0]**2 + v[1]**2)
-						d = [v[0]/r, v[1]/r]
-						strength = spring_strength * r
-						f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-				elif type(b) == Link:
-					for other in b.connected_nodes:
-						v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
-						r = math.sqrt(v[0]**2 + v[1]**2)
-						d = [v[0]/r, v[1]/r]
-						strength = spring_strength * r
-						f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-				# apply force
-				blobs[b] = [blobs[b][0] + f[0], blobs[b][1] + f[1]]
 				try:
+					f = [0, 0]
+					# antigravity pushing away from other blobs
+					for other in blobs:
+						if other is b: continue
+						v = [blobs[b][0] - blobs[other][0], blobs[b][1] - blobs[other][1]]
+						r = math.sqrt(v[0]**2 + v[1]**2)
+						if r < 1: r = 1
+						d = [v[0]/r, v[1]/r]
+						strength = antigravity_strength/(r**2)
+						f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+					# spring pulling links together
+					if type(b) == Node:
+						for other in b.links:
+							v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
+							r = math.sqrt(v[0]**2 + v[1]**2)
+							d = [v[0]/r, v[1]/r]
+							strength = spring_strength * r
+							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+					elif type(b) == Link:
+						for other in b.connected_nodes:
+							v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
+							r = math.sqrt(v[0]**2 + v[1]**2)
+							d = [v[0]/r, v[1]/r]
+							strength = spring_strength * r
+							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+					# apply force
+					blobs[b] = [blobs[b][0] + f[0], blobs[b][1] + f[1]]
 					if math.sqrt(f[0]**2 + f[1]**2) > convergence_threshold: converged = False
 				except OverflowError:
 					print("OverflowError; aborting")
@@ -278,15 +298,18 @@ class GraphElement():
 	pass
 
 class Node(GraphElement):
-	def __init__(self, parent, id, max_key_items=1):
+	def __init__(self, parent, id, max_key_items=1, region=None):
 		self.parent = parent
 		self.id = id
 		self.links = []
 		self.max_key_items = max_key_items
 		self.key_items = []
+		self.region = region
 	
 	def __str__(self):
-		return "Node %s" % self.id
+		s = "Node %s" % self.id
+		if self.region: s += " (%s)" % self.region
+		return s
 	
 	def get_linked_nodes(self):
 		linked_nodes = []
@@ -301,7 +324,7 @@ class Node(GraphElement):
 		assert len(self.key_items) <= self.max_key_items
 
 class Link(GraphElement):
-	def __init__(self, parent, node1, node2, required_keys=None, max_required_keys=1):
+	def __init__(self, parent, node1, node2, required_keys=None, max_required_keys=1, region=None):
 		self.parent = parent
 		self.id = "%s/%s" % tuple(sorted((str(node1), str(node2))))
 		self.connected_nodes = (node1, node2)
@@ -309,6 +332,7 @@ class Link(GraphElement):
 		if required_keys: self.required_keys = required_keys
 		else: self.required_keys = []
 		assert len(self.required_keys) <= self.max_required_keys
+		self.region = region
 	
 	def __str__(self):
 		s = "Link %s" % self.id
@@ -330,11 +354,12 @@ class Link(GraphElement):
 		self.required_keys.remove(key_item)
 
 class KeyItem():
-	def __init__(self, id, location=None, reusable=False):
+	def __init__(self, id, location=None, reusable=False, region=None):
 		self.id = id
 		self.reusable = reusable
 		self.used = False
 		self.location = location
+		self.region = region
 	
 	def __str__(self):
 		return "Key Item %s" % self.id
@@ -347,7 +372,7 @@ class KeyItem():
 def test():
 	for s in range(1):
 		random.seed(s)
-		graph = Graph.random_graph(min_nodes=30, max_nodes=40, lock_count=10, max_links_per_node=8, loopback_chance=0.5)
+		graph = Graph.random_graph(min_nodes=35, max_nodes=40, lock_count=10, max_links_per_node=4, loopback_chance_from_region=0.2, region_chance_from_region=0)
 		assert graph.validate()
 		#graph.draw(antigravity_strength=500000, spring_strength=0.3)
 		graph.draw(antigravity_strength=400000, spring_strength=0.4)
