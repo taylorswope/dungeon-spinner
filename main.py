@@ -10,6 +10,8 @@
 import random
 import logging
 import math
+import os
+os.system("color")
 
 logging.basicConfig(
 	level=logging.INFO,
@@ -24,6 +26,7 @@ class Graph():
 	def __init__(self):
 		self.nodes = []
 		self.links = []
+		self.keys = []
 		self.start_node = None
 	
 	def __str__(self):
@@ -83,6 +86,7 @@ class Graph():
 				next_node_id += 1
 				graph.link_nodes(current_node, new_node)
 		key_names = list(KEY_NAMES)
+		## TODO -- assign keys to regions (maybe use number of nodes per region to make a probability distribution)
 		for i in range(lock_count):
 			key_item = KeyItem(key_names.pop())
 			graph.place_key_item(key_item)
@@ -151,6 +155,7 @@ class Graph():
 				selected_node = random.choice(node_options)
 				selected_node.add_key_item(key_item)
 				logging.info("Placed %s in %s for a lock on %s" % (key_item, selected_node, selected_link))
+				self.keys.append(key_item)
 				return True
 			else:
 				selected_link.remove_required_key(key_item)
@@ -181,13 +186,14 @@ class Graph():
 	def validate(self):
 		return len(self.get_available_nodes()) == len(self.nodes)
 	
-	def draw(self, spring_strength=0.4, antigravity_strength=400000):
+	def draw(self, spring_strength=0.4, antigravity_strength=400000, max_force=-1):
 		size = (len(self.nodes) + len(self.links))*75
 		convergence_threshold = 10
 		
 		blobs = dict.fromkeys(self.nodes + self.links)
 		for b in blobs:
 			blobs[b] = [size*random.random(), size*random.random()]
+		blobs[self.start_node] = [size/2, size/2]
 		
 		converged = False
 		max_iter = 1000
@@ -199,6 +205,7 @@ class Graph():
 				break
 			converged = True
 			for b in blobs:
+				if b == self.start_node: continue
 				try:
 					f = [0, 0]
 					# antigravity pushing away from other blobs
@@ -225,8 +232,16 @@ class Graph():
 							d = [v[0]/r, v[1]/r]
 							strength = spring_strength * r
 							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+					if max_force > 0:
+						# limit force
+						force_magnitude = math.sqrt(f[0]**2 + f[1]**2)
+						if force_magnitude > max_force:
+							f = [f[0]/force_magnitude*max_force, f[1]/force_magnitude*max_force]
 					# apply force
 					blobs[b] = [blobs[b][0] + f[0], blobs[b][1] + f[1]]
+					# constrain
+					blobs[b][0] = max(min(blobs[b][0], size), 0)
+					blobs[b][1] = max(min(blobs[b][1], size), 0)
 					if math.sqrt(f[0]**2 + f[1]**2) > convergence_threshold: converged = False
 				except OverflowError:
 					print("OverflowError; aborting")
@@ -306,10 +321,13 @@ class Node(GraphElement):
 		self.key_items = []
 		self.region = region
 	
-	def __str__(self):
+	def __repr__(self):
 		s = "Node %s" % self.id
 		if self.region: s += " (%s)" % self.region
 		return s
+	
+	def __str__(self):
+		return self.id
 	
 	def get_linked_nodes(self):
 		linked_nodes = []
@@ -334,11 +352,14 @@ class Link(GraphElement):
 		assert len(self.required_keys) <= self.max_required_keys
 		self.region = region
 	
-	def __str__(self):
+	def __repr__(self):
 		s = "Link %s" % self.id
 		if len(self.required_keys) > 0:
 			s += " (Requires " + ", ".join([str(k) for k in self.required_keys]) + ")"
 		return s
+	
+	def __str__(self):
+		return self.id
 	
 	def get_destination_node(self, start_node):
 		assert start_node in self.connected_nodes
@@ -361,11 +382,187 @@ class KeyItem():
 		self.location = location
 		self.region = region
 	
-	def __str__(self):
+	def __repr__(self):
 		return "Key Item %s" % self.id
+	
+	def __str__(self):
+		return self.id
 	
 	def can_use(self):
 		return self.reusable or not self.used
+
+#############################################################################################
+
+def example_graph():
+	# Return an example graph with uniquely named rooms, passages, and keys
+	node_descriptor_1 = [
+		"big",
+		"cavernous",
+		"desecrated",
+		"fractured",
+		"gargantuan",
+		"loud",
+		"marred",
+		"noisy",
+		"painted",
+		"quiet",
+		"silent",
+		"tiny",
+		"vast"
+	]
+	node_descriptor_2 = [
+		"aromatic",
+		"blazing",
+		"cluttered",
+		"damp",
+		"echoing",
+		"frigid",
+		"grey",
+		"infested",
+		"murky",
+		"orange",
+		"pale",
+		"red",
+		"shining",
+		"unknowable",
+		"warm",
+		"yellow"
+	]
+	link_descriptor_1 = [
+		"cramped",
+		"destroyed",
+		"familiar",
+		"long",
+		"mysterious",
+		"narrow",
+		"steep",
+		"twisting",
+		"wide",
+	]
+	link_descriptor_2 = [
+		"barren",
+		"deserted",
+		"flooded",
+		"haunted",
+		"lovely",
+		"overgrown",
+		"rundown",
+		"sunlit",
+		"windy"
+	]
+	key_names = [
+		"a day when you feel better",
+		"all manner of deviltry",
+		"whispers from the storefronts",
+		"real suspicious cargo",
+		"a mouth full of surprises",
+		"brighter things than diamonds",
+		"a head full of memories",
+		"a whole lot of money",
+		"a thing of beauty",
+		"something hateful",
+		"the damage we've done",
+		"all your weapons",
+		"silent curses",
+		"standards of any kind",
+		"what you brought me out here for",
+		"the secret name",
+		"the spirit of a brighter time",
+		"the new dark light",
+		"my breaking point",
+		"all the things we'd held in secret",
+		"all the rainbow's heavy tones",
+		"whatever's left of me",
+		"the blessing I've got coming",
+		"the only thing I know"
+	]
+	
+	# Make graph
+	graph = Graph.random_graph(min_nodes=15, max_nodes=20, lock_count=5, max_links_per_node=4, loopback_chance_from_none=0.2, loopback_chance_from_region=0.4, region_chance_from_region=0)
+	assert len(node_descriptor_1)*len(node_descriptor_2) >= len(graph.nodes)
+	assert len(link_descriptor_1)*len(link_descriptor_2) >= len(graph.links)
+	assert len(key_names) >= len(graph.keys)
+	
+	# Name graph elements
+	random.shuffle(key_names)
+	for key in graph.keys:
+		key.id = Colors.KEY + key_names.pop() + Colors.END
+	used_node_names = []
+	for node in graph.nodes:
+		while True:
+			name = "a %s, %s room" % (random.choice(node_descriptor_1), random.choice(node_descriptor_2))
+			if name not in used_node_names:
+				used_node_names.append(name)
+				node.id = Colors.ROOM + name + Colors.END
+				break
+	used_link_names = []
+	for link in graph.links:
+		while True:
+			name = "the %s, %s path" % (random.choice(link_descriptor_1), random.choice(link_descriptor_2))
+			if name not in used_link_names:
+				used_link_names.append(name)
+				link.id = Colors.PATH + name + Colors.END
+				break
+	return graph
+
+def adventure(graph):
+	# Do a text-adventure-style crawl through the specified graph
+	
+	current_node = graph.start_node
+	visited_nodes = []
+	visited_links = []
+	attempted_links = []
+	inventory = []
+	line = "-------------------------------------------------------------------------------"
+	while True:
+		print(line)
+		print("> You find yourself in %s" % (current_node.id))
+		if current_node not in visited_nodes: visited_nodes.append(current_node)
+		if len(current_node.key_items) > 0 and current_node.key_items[0] not in inventory:
+			print("> In this room, you find %s" % (current_node.key_items[0]))
+			inventory.append(current_node.key_items[0])
+		if len(visited_nodes) >= len(graph.nodes):
+			print("> You have seen all that there is to see.")
+			response = get_user_options(["Yes", "No"], "> Continue exploring?")
+			if response == "No": break
+		link_options = []
+		for link in current_node.links:
+			link_options.append(str(link))
+			if link in visited_links:
+				link_options[-1] += " to %s" % link.get_destination_node(current_node)
+			elif link in attempted_links:
+				link_options[-1] += ", which requires %s" % link.required_keys[0]
+		selected_link = current_node.links[get_user_options(link_options, "Which path would you like to take?", return_index = True)]
+		print(line)
+		if len(selected_link.required_keys) > 0 and selected_link.required_keys[0] not in inventory:
+			print("> You cannot travel this path until you have found %s" % (selected_link.required_keys[0]))
+			if selected_link not in attempted_links: attempted_links.append(selected_link)
+		else:
+			if len(selected_link.required_keys) > 0:
+				print("> Travelling this path requires %s, which you have found" % (selected_link.required_keys[0]))
+			print("> You travel down %s and reach %s" % (selected_link, selected_link.get_destination_node(current_node)))
+			current_node = selected_link.get_destination_node(current_node)
+			if selected_link not in visited_links: visited_links.append(selected_link)
+		
+
+def get_user_options(options, prompt="Select from the following:", return_index=False):
+	while True:
+		print(prompt)
+		for i in range(0, len(options)):
+			print("%s:\t%s" % (i+1, options[i]))
+		index = input("Selection: ")
+		try:
+			index = int(index) - 1
+			if return_index: return index
+			else: return options[index]
+		except:
+			print("Input must be one of the integer values offered")
+
+class Colors():
+	END = "\x1b[0m"
+	KEY = "\x1b[7;37;45m"
+	ROOM = "\x1b[7;37;41m"
+	PATH = "\x1b[7;37;40m"
 
 #############################################################################################
 
@@ -375,13 +572,21 @@ def test():
 		graph = Graph.random_graph(min_nodes=35, max_nodes=40, lock_count=10, max_links_per_node=4, loopback_chance_from_region=0.2, region_chance_from_region=0)
 		assert graph.validate()
 		#graph.draw(antigravity_strength=500000, spring_strength=0.3)
-		graph.draw(antigravity_strength=400000, spring_strength=0.4)
+		#graph.draw(antigravity_strength=400000, spring_strength=0.4)
+		#graph.draw(antigravity_strength=400000, spring_strength=0.4, max_force=50000)
+		graph.draw(antigravity_strength=400000, spring_strength=0.4, max_force=30000)
 
-def test2():
-	graph = Graph.random_graph()
-	for link in graph.links: print(link)
 
 #############################################################################################
 
 if __name__ == "__main__":
-	test()
+	import argparse
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--adventure", help="Play through an adventure with an example dungeon.", action="store_true")
+	parser.add_argument("--test", help="Run a test function.", action="store_true")
+	args = parser.parse_args()
+	
+	if args.adventure:
+		adventure(example_graph())
+	elif args.test:
+		test()
