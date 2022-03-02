@@ -1,12 +1,3 @@
-"""
-- Pick a random Link and place a Lock there
-- Find valid rooms for the Key:
-	- Start with the starting room and follow any unlocked links
-	- When coming across a room with a Key, re-evaluate links from visited rooms
-	- Continue until there are no more unlocked links
-- Pick a random room from the set of valid rooms and place the Key there
-"""
-
 import random
 import logging
 import math
@@ -22,6 +13,9 @@ logging.basicConfig(
 
 KEY_NAMES = tuple("ZYXWVUTSRQPONMLKJIHGFEDCBA")
 
+class GraphError(Exception):
+	pass
+
 class Graph():
 	def __init__(self):
 		self.nodes = []
@@ -35,7 +29,7 @@ class Graph():
 	def details(self):
 		s = "Graph:"
 		for n in self.nodes:
-			s += "\n\t%s" % n
+			s += "\n\t%s (Region %s)" % (n, n.region)
 			if len(n.key_items) > 0:
 				s += "\n\t\tKeys:"
 				for k in n.key_items:
@@ -47,31 +41,74 @@ class Graph():
 	
 	@classmethod
 	def random_graph(cls,
-		min_nodes=6,
-		max_nodes=10,
-		max_links_per_node=4,
+		node_count=30,
+		max_links_per_node=3,
+		key_count=10,
 		loopback_chance_from_none=0.1, # chance that a link will go to an existing node instead of a new one when coming from a region-less node
-		loopback_chance_from_region=0.1, # chance that a link will go to an existing node instead of a new one when coming from an existing region
-		lock_count=4,
+		loopback_chance_from_region=0.2, # chance that a link will go to an existing node instead of a new one when coming from an existing region
+		regions_can_connect=False, # whether or not a region can connect to another region
 		region_chance_from_none=0.4, # chance that a new node will introduce a new region when stemming from a region-less node
-		region_chance_from_region=0.1 # chance that a new node will introuce a new region instead of continuing an existing region
+		region_chance_from_region=0.0, # chance that a new node will introuce a new region instead of continuing an existing region
+		region_key_chance=0.7, # for each lock, chance that it will be region-specific rather than global
+		extra_locks_for_global_keys=10, # number of extra locks to be places for non-region keys (i.e. the same key will open multiple locks)
+		priority_for_low_link_nodes=1, # when selecting which node to expand from, this multiplier will be used as a weight when randomly selecting nodes with fewer links (i.e. when this is higher, nodes with fewer links will be prioritized)
+		avoid_redundant_links=True # try to avoid linking two nodes that are already linked
 	):
-		graph = cls()
-		next_node_id = 1
-		start_node = graph.add_node(node_id=str(next_node_id))
-		graph.set_start_node(start_node)
-		next_node_id += 1
-		node_count = random.randint(min_nodes, max_nodes)
-		current_region = 1
-		while len(graph.nodes) <= node_count:
-			node_options = [n for n in graph.nodes if len(n.links) < max_links_per_node]
-			current_node = random.choice(node_options)
-			roll = random.random()
-			if len(node_options) > 1 and ((current_node.region and roll < loopback_chance_from_region) or roll < loopback_chance_from_none):
-				# link back to an existing node instead of making a new one
-				linked_node = random.choice([n for n in node_options if n is not current_node])
-				graph.link_nodes(current_node, linked_node)
-			else:
+		## TODO:
+		## option to prioritize/force more even distribution of links (i.e. avoid dead ends)
+		## option to prioritize linking off of regions or non-regions
+		
+		logging.info(
+			f"""Generating a random graph with the following settings:
+	node_count={node_count},
+	max_links_per_node={max_links_per_node},
+	key_count={key_count},
+	loopback_chance_from_none={loopback_chance_from_none}, 
+	loopback_chance_from_region={loopback_chance_from_region},
+	regions_can_connect={regions_can_connect},
+	region_chance_from_none={region_chance_from_none},
+	region_chance_from_region={region_chance_from_region},
+	region_key_chance={region_key_chance},
+	extra_locks_for_global_keys={extra_locks_for_global_keys},
+	priority_for_low_link_nodes={priority_for_low_link_nodes},
+	avoid_redundant_links={avoid_redundant_links}"""
+		)
+		attempts = 0
+		max_attempts = 5
+		while attempts < max_attempts:
+			graph_success = True
+			attempts += 1
+			logging.info("Starting attempt #%s..." % attempts)
+			graph = cls()
+			next_node_id = 1
+			start_node = graph.add_node(node_id=str(next_node_id))
+			graph.set_start_node(start_node)
+			next_node_id += 1
+			current_region = 1
+			while len(graph.nodes) <= node_count:
+				# pick which node to expand from
+				node_options = [n for n in graph.nodes if len(n.links) < max_links_per_node]
+				if len(node_options) == 0:
+					logging.error("Could not find any valid nodes to continue graph; aborting this attempt.")
+					graph_success = False
+					break
+				if priority_for_low_link_nodes == 1:
+					current_node = random.choice(node_options)
+				else:
+					current_node = random.choices(node_options, weights = [priority_for_low_link_nodes**(max_links_per_node-len(n.links)-1) for n in node_options])[0]
+				# see if we should loop back to an existing node instead of creating a new one
+				roll = random.random()
+				if len(node_options) > 1 and ((current_node.region and roll < loopback_chance_from_region) or roll < loopback_chance_from_none):
+					linked_node_choices = [n for n in node_options if n is not current_node]
+					if current_node.region and not regions_can_connect:
+						linked_node_choices = [n for n in linked_node_choices if (n.region == None or n.region == current_node.region)]
+					if avoid_redundant_links:
+						linked_node_choices = [n for n in linked_node_choices if current_node not in n.get_linked_nodes()]
+					if len(linked_node_choices) > 0:
+						linked_node = random.choice(linked_node_choices)
+						graph.link_nodes(current_node, linked_node)
+						continue
+				# create a new node
 				roll = random.random()
 				if current_node.region:
 					needed_roll = region_chance_from_region
@@ -85,12 +122,36 @@ class Graph():
 				new_node = graph.add_node(node_id=str(next_node_id), region=region)
 				next_node_id += 1
 				graph.link_nodes(current_node, new_node)
-		key_names = list(KEY_NAMES)
-		## TODO -- assign keys to regions (maybe use number of nodes per region to make a probability distribution)
-		for i in range(lock_count):
-			key_item = KeyItem(key_names.pop())
-			graph.place_key_item(key_item)
-		return graph
+			if not graph_success: continue
+			# add keys and locks
+			key_names = list(KEY_NAMES)
+			while len(graph.keys) < key_count:
+				roll = random.random()
+				if current_region > 1 and roll < region_key_chance:
+					region = random.randrange(1, current_region)
+				else:
+					region = None
+				if len([l for l in graph.links if l.region == region and len(l.required_keys)==0]) == 0:
+					region = None # failsafe for if the region we picked doesn't have any lockable links
+				key_item = KeyItem(key_names.pop(), region=region)
+				success = graph.place_key_item(key_item)
+				if not success:
+					logging.error("Could not find any valid nodes to place a key item; aborting this attempt.")
+					graph_success = False
+					break
+			if not graph_success: continue
+			while len([l for l in graph.links if len(l.required_keys)>0]) < key_count+extra_locks_for_global_keys:
+				global_keys = [k for k in graph.keys if k.region == None]
+				if len(global_keys) == 0: continue
+				key = random.choice(global_keys)
+				success = graph.place_lock_for_key(key, try_again_on_failure=True)
+				if not success:
+					logging.error("Could not find any valid links to place a lock; aborting this attempt.")
+					graph_success = False
+					break
+			if not graph_success: continue
+			return graph
+		raise GraphError("Failed to create a valid graph after %s attempts; aborting graph generation." % max_attempts)
 		
 	def add_node(self, node_id="null", region=None):
 		new_node = Node(self, node_id, region=region)
@@ -118,6 +179,7 @@ class Graph():
 		return True
 	
 	def get_available_nodes(self):
+		"""Returns a list of available nodes that are reachable from the start node, using only key items found in available nodes"""
 		assert self.start_node != None
 		available_keys = []
 		available_nodes = [self.start_node]
@@ -151,6 +213,8 @@ class Graph():
 			selected_link = random.choice(link_options)
 			selected_link.add_required_key(key_item)
 			node_options = [n for n in self.get_available_nodes() if len(n.key_items) < n.max_key_items]
+			if key_item.region:
+				node_options = [n for n in node_options if n.region == key_item.region]
 			if len(node_options) > 0:
 				selected_node = random.choice(node_options)
 				selected_node.add_key_item(key_item)
@@ -162,7 +226,7 @@ class Graph():
 				link_options.remove(selected_link)
 				logging.info("Failed to place %s on %s" % (key_item, selected_link))
 				if not try_again_on_failure: return False
-		logging.info("Failed to place %s" % (key_item))
+		logging.info("Failed to place key item %s" % (key_item))
 		return False
 	
 	def place_lock_for_key(self, key_item, try_again_on_failure=True):
@@ -186,7 +250,11 @@ class Graph():
 	def validate(self):
 		return len(self.get_available_nodes()) == len(self.nodes)
 	
-	def draw(self, spring_strength=0.4, antigravity_strength=400000, max_force=-1):
+	def draw(self, max_tries=3, max_iterations=1000, max_force=30000):
+		"""Creates a force-directed graph representation"""
+		spring_strength=0.4 #0.4
+		antigravity_strength=40000 #400000
+		
 		size = (len(self.nodes) + len(self.links))*75
 		convergence_threshold = 10
 		
@@ -195,80 +263,104 @@ class Graph():
 			blobs[b] = [size*random.random(), size*random.random()]
 		blobs[self.start_node] = [size/2, size/2]
 		
-		converged = False
-		max_iter = 1000
-		iter = 0
-		while not converged:
-			iter += 1
-			if iter > max_iter:
-				print("Exceeded maximum iterations of %s; aborting" % max_iter)
-				break
-			converged = True
-			for b in blobs:
-				if b == self.start_node: continue
-				try:
-					f = [0, 0]
-					# antigravity pushing away from other blobs
-					for other in blobs:
-						if other is b: continue
-						v = [blobs[b][0] - blobs[other][0], blobs[b][1] - blobs[other][1]]
-						r = math.sqrt(v[0]**2 + v[1]**2)
-						if r < 1: r = 1
-						d = [v[0]/r, v[1]/r]
-						strength = antigravity_strength/(r**2)
-						f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-					# spring pulling links together
-					if type(b) == Node:
-						for other in b.links:
-							v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
-							r = math.sqrt(v[0]**2 + v[1]**2)
-							d = [v[0]/r, v[1]/r]
-							strength = spring_strength * r
-							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-					elif type(b) == Link:
-						for other in b.connected_nodes:
-							v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
-							r = math.sqrt(v[0]**2 + v[1]**2)
-							d = [v[0]/r, v[1]/r]
-							strength = spring_strength * r
-							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
-					if max_force > 0:
-						# limit force
-						force_magnitude = math.sqrt(f[0]**2 + f[1]**2)
-						if force_magnitude > max_force:
-							f = [f[0]/force_magnitude*max_force, f[1]/force_magnitude*max_force]
-					# apply force
-					blobs[b] = [blobs[b][0] + f[0], blobs[b][1] + f[1]]
-					# constrain
-					blobs[b][0] = max(min(blobs[b][0], size), 0)
-					blobs[b][1] = max(min(blobs[b][1], size), 0)
-					if math.sqrt(f[0]**2 + f[1]**2) > convergence_threshold: converged = False
-				except OverflowError:
-					print("OverflowError; aborting")
+		success = False
+		try_count = 0
+		while not success:
+			try_count += 1
+			logging.info("Starting attempt #%s at drawing graph %s..." % (try_count, self))
+			success = True
+			converged = False
+			max_iterations = 1000
+			iteration = 0
+			while not converged:
+				iteration += 1
+				if iteration > max_iterations:
+					logging.warning("Exceeded maximum iterations of %s; aborting" % max_iterations)
+					success = False
 					break
+				converged = True
+				for b in blobs:
+					if b == self.start_node: continue # keep the start node rooted in place
+					try:
+						f = [0, 0]
+						# antigravity pushing away from other blobs
+						for other in blobs:
+							if other is b: continue
+							v = [blobs[b][0] - blobs[other][0], blobs[b][1] - blobs[other][1]]
+							r = math.sqrt(v[0]**2 + v[1]**2)
+							r = max(r, 1)
+							d = [v[0]/r, v[1]/r]
+							strength = antigravity_strength/(r**2)
+							f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+						# spring pulling links together
+						if type(b) == Node:
+							for other in b.links:
+								v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
+								r = math.sqrt(v[0]**2 + v[1]**2)
+								r = max(r, 1)
+								d = [v[0]/r, v[1]/r]
+								strength = spring_strength * r
+								f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+						elif type(b) == Link:
+							for other in b.connected_nodes:
+								v = [blobs[other][0] - blobs[b][0], blobs[other][1] - blobs[b][1]]
+								r = math.sqrt(v[0]**2 + v[1]**2)
+								r = max(r, 1)
+								d = [v[0]/r, v[1]/r]
+								strength = spring_strength * r
+								f = [f[0] + strength*d[0], f[1] + strength*d[1]]
+						if max_force > 0:
+							# limit force
+							force_magnitude = math.sqrt(f[0]**2 + f[1]**2)
+							if force_magnitude > max_force:
+								f = [f[0]/force_magnitude*max_force, f[1]/force_magnitude*max_force]
+						# apply force
+						blobs[b] = [blobs[b][0] + f[0], blobs[b][1] + f[1]]
+						# constrain blob positions
+						blobs[b][0] = max(min(blobs[b][0], size), 0)
+						blobs[b][1] = max(min(blobs[b][1], size), 0)
+						if math.sqrt(f[0]**2 + f[1]**2) > convergence_threshold:
+							converged = False
+					except OverflowError:
+						logging.warning("OverflowError; aborting")
+						success = False
+						break
+			if try_count > max_tries:
+				logging.error("Could not draw a graph after %s attempts of %s iterations." % (max_tries, max_iterations))
+				break
 		
 		from PIL import Image, ImageDraw
-		im = Image.new("RGB", (size, size), (255, 255, 255))
+		blob_size = 20
+		margin = blob_size + 10
+		min_x = min([b[0] for b in blobs.values()])
+		max_x = max([b[0] for b in blobs.values()])
+		min_y = min([b[1] for b in blobs.values()])
+		max_y = max([b[1] for b in blobs.values()])
+		x_size = int(max_x - min_x) + 2*margin
+		y_size = int(max_y - min_y) + 2*margin
+		x_offset = margin - min_x
+		y_offset = margin - min_y
+		im = Image.new("RGB", (x_size, y_size), (255, 255, 255))
 		draw = ImageDraw.Draw(im)
-		blob_size = 50
+		
 		key_color_map = {}
 		for b, position in blobs.items():
 			if type(b) == Node:
 				for link in b.links:
-					draw.line([position[0], position[1], blobs[link][0], blobs[link][1]], fill=(0, 0, 0), width=2)
+					draw.line([position[0]+x_offset, position[1]+y_offset, blobs[link][0]+x_offset, blobs[link][1]+y_offset], fill=(0, 0, 0), width=2)
 				if b is self.start_node:
-					draw.rectangle([position[0]-blob_size-2, position[1]-blob_size-2, position[0]+blob_size+2, position[1]+blob_size+2], outline=(255, 0, 0), fill=None, width=2)
-				draw.rectangle([position[0]-blob_size, position[1]-blob_size, position[0]+blob_size, position[1]+blob_size], outline=(0, 0, 0), fill=(255, 255, 255), width=2)
+					draw.rectangle([position[0]-blob_size-2+x_offset, position[1]-blob_size-2+y_offset, position[0]+blob_size+2+x_offset, position[1]+blob_size+2+y_offset], outline=(255, 0, 0), fill=None, width=2)
+				draw.rectangle([position[0]-blob_size+x_offset, position[1]-blob_size+y_offset, position[0]+blob_size+x_offset, position[1]+blob_size+y_offset], outline=(0, 0, 0), fill=(255, 255, 255), width=2)
 				if len(b.key_items) > 0:
 					for k in b.key_items:
 						if k in key_color_map:
 							key_color = key_color_map[k]
 						else:
-							key_color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+							key_color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
 							key_color_map[k] = key_color
-						draw.rectangle([position[0]-blob_size/5, position[1]-blob_size/5, position[0]+blob_size/5, position[1]+blob_size/5], fill=key_color)
-						draw.text([position[0], position[1]], str(k), fill=(0, 0, 0))
-				draw.text([position[0]-blob_size+4, position[1]-blob_size+4], str(b), fill=(0, 0, 0))
+						draw.rectangle([position[0]-blob_size/4+x_offset, position[1]-blob_size/4+y_offset, position[0]+blob_size/4+x_offset, position[1]+blob_size/4+y_offset], fill=key_color)
+						draw.text([position[0]-2+x_offset, position[1]-4+y_offset], str(k), fill=(0, 0, 0))
+				draw.text([position[0]-blob_size+4+x_offset, position[1]-blob_size+4+y_offset], str(b), fill=(0, 0, 0))
 			else: # Link
 				if len(b.required_keys) > 0:
 					k = b.required_keys[0]
@@ -282,31 +374,9 @@ class Graph():
 					continue
 					color = (0, 0, 0)
 					size = blob_size/10
-				draw.ellipse([position[0]-size, position[1]-size, position[0]+size, position[1]+size], outline=(0, 0, 0), fill=color, width=2)
+				draw.ellipse([position[0]-size+x_offset, position[1]-size+y_offset, position[0]+size+x_offset, position[1]+size+y_offset], outline=(0, 0, 0), fill=color, width=2)
 				if len(b.required_keys) > 0:
-					draw.text([position[0], position[1]], str(k), fill=(0, 0, 0))
-		# crop to fit
-		"""
-		center_x = int(im.size[0]/2)
-		center_y = int(im.size[1]/2)
-		xmin, ymin = im.size
-		xmax, ymax = 0, 0
-		for x in range(im.size[0]):
-			for y in range(im.size[1]):
-				if im.getpixel((x, y)) != (255, 255, 255):
-					if x > xmax: xmax = x
-					if x < xmin: xmin = x
-					if y > ymax: ymax = y
-					if y < ymin: ymin = y
-		x_from_center = max([abs(center_x - x) for x in (xmin, xmax)])
-		y_from_center = max([abs(center_y - y) for y in (ymin, ymax)])
-		return im.crop((
-			center_x - x_from_center - 1,
-			center_y - y_from_center - 1,
-			center_x + x_from_center + 1,
-			center_y + y_from_center + 1
-		))
-		"""
+					draw.text([position[0]-2+x_offset, position[1]-4+y_offset], str(k), fill=(0, 0, 0))
 		im.show()
 
 class GraphElement():
@@ -474,11 +544,12 @@ def example_graph():
 		"all the rainbow's heavy tones",
 		"whatever's left of me",
 		"the blessing I've got coming",
-		"the only thing I know"
+		"the only thing I know",
+		"one good thing to say"
 	]
 	
 	# Make graph
-	graph = Graph.random_graph(min_nodes=15, max_nodes=20, lock_count=5, max_links_per_node=4, loopback_chance_from_none=0.2, loopback_chance_from_region=0.4, region_chance_from_region=0)
+	graph = Graph.random_graph(node_count=20, key_count=8, max_links_per_node=4, loopback_chance_from_none=0.2, loopback_chance_from_region=0.4, region_chance_from_region=0, regions_can_connect=False, avoid_redundant_links=True)
 	assert len(node_descriptor_1)*len(node_descriptor_2) >= len(graph.nodes)
 	assert len(link_descriptor_1)*len(link_descriptor_2) >= len(graph.links)
 	assert len(key_names) >= len(graph.keys)
@@ -513,7 +584,23 @@ def adventure(graph):
 	visited_links = []
 	attempted_links = []
 	inventory = []
+	wanderer_node = graph.start_node
+	wanderer_inventory = []
+	wanderer_cooldown = 3
+	wanderer_actions = [
+		"gives you an unsettling look",
+		"nods silently",
+		"whispers a secret",
+		"mumbles foreboding omens",
+		"listens to your story",
+		"gives you a cryptic signal",
+		"looks at you worriedly",
+		"gives you a blessing",
+		"smiles warmly at you"
+	]
+	random.shuffle(wanderer_actions)
 	line = "-------------------------------------------------------------------------------"
+	
 	while True:
 		print(line)
 		print("> You find yourself in %s" % (current_node.id))
@@ -543,7 +630,20 @@ def adventure(graph):
 			print("> You travel down %s and reach %s" % (selected_link, selected_link.get_destination_node(current_node)))
 			current_node = selected_link.get_destination_node(current_node)
 			if selected_link not in visited_links: visited_links.append(selected_link)
-		
+			# wanderer
+			if len(wanderer_actions) > 0:
+				if wanderer_cooldown <= 0:
+					if current_node == wanderer_node:
+						print("> You cross paths with a %swanderer%s, who %s before continuing on." % (Colors.WANDERER, Colors.END, wanderer_actions.pop()))
+						if len(wanderer_actions) == 0:
+							print("> It is the last time you will see each other.")
+						wanderer_cooldown = 3
+				else:
+					wanderer_cooldown -= 1
+				if len(wanderer_node.key_items) > 0 and wanderer_node.key_items[0] not in wanderer_inventory:
+					wanderer_inventory.append(wanderer_node.key_items[0])
+				selected_link = random.choice([l for l in wanderer_node.links if len(l.required_keys)==0 or l.required_keys[0] in wanderer_inventory])
+				wanderer_node = selected_link.get_destination_node(wanderer_node)
 
 def get_user_options(options, prompt="Select from the following:", return_index=False):
 	while True:
@@ -551,30 +651,73 @@ def get_user_options(options, prompt="Select from the following:", return_index=
 		for i in range(0, len(options)):
 			print("%s:\t%s" % (i+1, options[i]))
 		index = input("Selection: ")
-		try:
+		if not index.isdigit() or int(index)-1 >= len(options):
+			print("Input must be one of the integer values offered")
+		else:
 			index = int(index) - 1
 			if return_index: return index
 			else: return options[index]
-		except:
-			print("Input must be one of the integer values offered")
 
 class Colors():
 	END = "\x1b[0m"
 	KEY = "\x1b[7;37;45m"
 	ROOM = "\x1b[7;37;41m"
 	PATH = "\x1b[7;37;40m"
+	WANDERER = "\x1b[7;37;42m"
 
 #############################################################################################
 
 def test():
 	for s in range(1):
-		random.seed(s)
-		graph = Graph.random_graph(min_nodes=35, max_nodes=40, lock_count=10, max_links_per_node=4, loopback_chance_from_region=0.2, region_chance_from_region=0)
+		#random.seed(s*10)
+		random.seed(10)
+		
+		
+		graph = Graph.random_graph(
+			node_count=48,
+			max_links_per_node=5,
+			key_count=20,
+			loopback_chance_from_none=0.39333963307182956, 
+			loopback_chance_from_region=0.4399818290196964,
+			regions_can_connect=True,
+			region_chance_from_none=0.12991372374448845,
+			region_chance_from_region=0.3178629348029946,
+			region_key_chance=0.9049456946664788,
+			extra_locks_for_global_keys=10,
+			priority_for_low_link_nodes=5,
+			avoid_redundant_links=True
+		)
+		
+		"""
+		graph = Graph.random_graph(
+			node_count=random.randint(20, 50),
+			max_links_per_node=random.randint(3, 5),
+			key_count=random.randint(10, 20),
+			loopback_chance_from_none=random.uniform(0, 0.5), # chance that a link will go to an existing node instead of a new one when coming from a region-less node
+			loopback_chance_from_region=random.uniform(0, 0.5), # chance that a link will go to an existing node instead of a new one when coming from an existing region
+			regions_can_connect=random.choice((True, False)), # whether or not a region can connect to another region
+			region_chance_from_none=random.uniform(0, 0.5), # chance that a new node will introduce a new region when stemming from a region-less node
+			region_chance_from_region=random.uniform(0, 0.5), # chance that a new node will introuce a new region instead of continuing an existing region
+			region_key_chance=random.random(), # for each lock, chance that it will be region-specific rather than global
+			extra_locks_for_global_keys=random.randint(5, 15), # number of extra locks to be places for non-region keys (i.e. the same key will open multiple locks)
+			priority_for_low_link_nodes=random.randint(1, 5),
+			avoid_redundant_links=random.choice((True, False))
+		)
+		"""
+		#graph = Graph.random_graph(node_count=40, key_count=10, max_links_per_node=3, loopback_chance_from_region=0.2, region_chance_from_region=0, regions_can_connect=False, extra_locks_for_global_keys=10)
+		for n in graph.nodes:
+			n.id = "%s (%s)" % (n.id, n.region) if n.region else "%s (%s)" % (n.id, 0)
 		assert graph.validate()
-		#graph.draw(antigravity_strength=500000, spring_strength=0.3)
-		#graph.draw(antigravity_strength=400000, spring_strength=0.4)
-		#graph.draw(antigravity_strength=400000, spring_strength=0.4, max_force=50000)
-		graph.draw(antigravity_strength=400000, spring_strength=0.4, max_force=30000)
+		random.seed(10)
+		graph.draw(max_tries=1, max_iterations=1000)
+		random.seed(10)
+		graph.draw(max_tries=1, max_iterations=1001)
+		
+		random.seed(10)
+		graph.draw(max_tries=1, max_force=20000, max_iterations=1000)
+		random.seed(10)
+		graph.draw(max_tries=1, max_force=20000, max_iterations=1001)
+		
 
 
 #############################################################################################
@@ -582,11 +725,58 @@ def test():
 if __name__ == "__main__":
 	import argparse
 	parser = argparse.ArgumentParser()
+	parser.add_argument("--generate", help="Generate a dungeon graph and print its details.", action="store_true")
+	parser.add_argument("--draw", help="When using the --generate flag, show a rough graphical representation of the dungeon.", action="store_true")
 	parser.add_argument("--adventure", help="Play through an adventure with an example dungeon.", action="store_true")
 	parser.add_argument("--test", help="Run a test function.", action="store_true")
+	
+	parser.add_argument("--seed", default=None, help="When using the --generate flag, specifies the seed used for random number generation.")
+	parser.add_argument("--node_count", type=int, default=30, help="When using the --generate flag, specifies the number of nodes in the final graph.")
+	parser.add_argument("--max_links_per_node", type=int, default=3, help="When using the --generate flag, specifies the maximum number of links a single node can have.")
+	parser.add_argument("--key_count", type=int, default=10, help="When using the --generate flag, specifies the number of key items to be placed in the graph.")
+	parser.add_argument("--loopback_chance_from_none", type=float, default=0.1, help="When using the --generate flag, specifies the chance that a region-less node will connect back to a pre-existing node instead of spawning a new one.")
+	parser.add_argument("--loopback_chance_from_region", type=float, default=0.2, help="When using the --generate flag, specifies the chance that a regioned node will connect back to a pre-existing node instead of spawning a new one.")
+	parser.add_argument("--regions_can_connect", action="store_true", help="When using the --generate flag, specifies if a regioned node is able to connect to a regioned node with a different region. Does not limit connections to region-less nodes.")
+	parser.add_argument("--region_chance_from_none", type=float, default=0.4, help="When using the --generate flag, specifies the chance that a new node will start a new region when spawned off of a region-less node.")
+	parser.add_argument("--region_chance_from_region", type=float, default=0.0, help="When using the --generate flag, specifies the chance that a new node will start a new region when spawned off of a regioned node.")
+	parser.add_argument("--region_key_chance", type=float, default=0.7, help="When using the --generate flag, specifies the chance that a new key item will be region-specific (i.e. the lock and key will both be placed within the same region).")
+	parser.add_argument("--extra_locks_for_global_keys", type=int, default=10, help="When using the --generate flag, specifies the number of additional locks to place for non-regioned keys (i.e. when this value is greater than 0, at least one key will open multiple locks).")
+	parser.add_argument("--priority_for_low_link_nodes", type=float, default=1.0, help="When using the --generate flag, specifies the weight given to nodes with fewer links when selecting which node to branch from (i.e. when this value is higher, nodes with fewer links will be prioritized when adding new links).")
+	parser.add_argument("--avoid_redundant_links", action="store_true", help="When using the --generate flag, specifies if the generator should attempt to avoid linking two nodes that are already linked.")
+	
 	args = parser.parse_args()
 	
-	if args.adventure:
+	if args.generate:
+		for arg in (
+			args.loopback_chance_from_none,
+			args.loopback_chance_from_region,
+			args.region_chance_from_none,
+			args.region_chance_from_region,
+			args.region_key_chance
+		):
+			if arg < 0 or arg > 1:
+				raise ValueError("Chance parameters must be between 0 and 1.")
+		random.seed(args.seed)
+		graph = Graph.random_graph(
+			node_count = args.node_count,
+			max_links_per_node = args.max_links_per_node,
+			key_count = args.key_count,
+			loopback_chance_from_none = args.loopback_chance_from_none,
+			loopback_chance_from_region = args.loopback_chance_from_region,
+			regions_can_connect = args.regions_can_connect,
+			region_chance_from_none = args.region_chance_from_none,
+			region_chance_from_region = args.region_chance_from_region,
+			region_key_chance = args.region_key_chance,
+			extra_locks_for_global_keys = args.extra_locks_for_global_keys,
+			priority_for_low_link_nodes = args.priority_for_low_link_nodes,
+			avoid_redundant_links = args.avoid_redundant_links
+		)
+		print(graph.details())
+		if args.draw:
+			graph.draw()
+	elif args.adventure:
 		adventure(example_graph())
 	elif args.test:
 		test()
+	else:
+		parser.print_help()
