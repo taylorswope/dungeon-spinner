@@ -142,7 +142,7 @@ class Graph():
 			if not graph_success: continue
 			while len([l for l in graph.links if len(l.required_keys)>0]) < key_count+extra_locks_for_global_keys:
 				global_keys = [k for k in graph.keys if k.region == None]
-				if len(global_keys) == 0: continue
+				if len(global_keys) == 0: break
 				key = random.choice(global_keys)
 				success = graph.place_lock_for_key(key, try_again_on_failure=True)
 				if not success:
@@ -668,11 +668,11 @@ class Colors():
 #############################################################################################
 
 def test():
-	for s in range(1):
-		#random.seed(s*10)
-		random.seed(10)
+	for s in range(10):
+		#random.seed(s*100)
+		#random.seed(10)
 		
-		
+		"""
 		graph = Graph.random_graph(
 			node_count=48,
 			max_links_per_node=5,
@@ -688,7 +688,7 @@ def test():
 			avoid_redundant_links=True
 		)
 		
-		"""
+		
 		graph = Graph.random_graph(
 			node_count=random.randint(20, 50),
 			max_links_per_node=random.randint(3, 5),
@@ -704,19 +704,21 @@ def test():
 			avoid_redundant_links=random.choice((True, False))
 		)
 		"""
+		graph = Graph.random_graph()
+		
 		#graph = Graph.random_graph(node_count=40, key_count=10, max_links_per_node=3, loopback_chance_from_region=0.2, region_chance_from_region=0, regions_can_connect=False, extra_locks_for_global_keys=10)
 		for n in graph.nodes:
 			n.id = "%s (%s)" % (n.id, n.region) if n.region else "%s (%s)" % (n.id, 0)
 		assert graph.validate()
-		random.seed(10)
-		graph.draw(max_tries=1, max_iterations=1000)
-		random.seed(10)
-		graph.draw(max_tries=1, max_iterations=1001)
+		#random.seed(10)
+		graph.draw(max_tries=3, max_iterations=1000)
+		#random.seed(10)
+		#graph.draw(max_tries=1, max_iterations=1001)
 		
-		random.seed(10)
-		graph.draw(max_tries=1, max_force=20000, max_iterations=1000)
-		random.seed(10)
-		graph.draw(max_tries=1, max_force=20000, max_iterations=1001)
+		#random.seed(10)
+		#graph.draw(max_tries=1, max_force=20000, max_iterations=1000)
+		#random.seed(10)
+		#graph.draw(max_tries=1, max_force=20000, max_iterations=1001)
 		
 
 
