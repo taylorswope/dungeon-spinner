@@ -37,6 +37,7 @@ class Graph():
 			s += "\n\t\tLinks:"
 			for l in n.links:
 				s += "\n\t\t\t%s" % l
+				if len(l.required_keys) > 0: s += " (Locked by %s)" % ", ".join([str(k) for k in l.required_keys])
 		return s
 	
 	@classmethod
